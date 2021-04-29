@@ -25,17 +25,28 @@ import albumentations
 from albumentations import pytorch as AT
 
 
-def infer(modelDataPath, datasetPath):
+def infer(modelFolderDataPath, datasetPath):
     SeedEverything(41)
 
-    labelList = ['baseball', 'formula1', 'fencing', 'motogp', 'ice_hockey',# был ранее получен функцией GetCategoryList
+    labelList = ['baseball', 'formula1', 'fencing', 'motogp', 'ice_hockey',
+                 # был ранее получен функцией GetCategoryList
                  'wrestling', 'boxing', 'volleyball', 'cricket', 'basketball', 'wwe',
                  'swimming', 'weight_lifting', 'gymnastics', 'tennis', 'kabaddi', 'badminton',
                  'football', 'table_tennis', 'hockey', 'shooting', 'chess']
 
     test_files = os.listdir(datasetPath)
+
+    # сортировка файлов в правильном порядке
+    for i in range(0, len(test_files)):
+        test_files[i] = int(test_files[i].replace(".jpg", ""))
+
+    test_files.sort()
+
+    for i in range(0, len(test_files)):
+        test_files[i] = str(test_files[i]) + ".jpg"
+
     print("Test set size: ", len(test_files))  # 1645
-    os.getcwd()
+
     class SportsDataset(Dataset):
         def __init__(self, file_list, dir, transform=None):
             self.file_list = file_list
@@ -68,34 +79,83 @@ def infer(modelDataPath, datasetPath):
     testloader = torch.utils.data.DataLoader(test_set, batch_size=1,
                                              num_workers=0, shuffle=False)
 
-    samples = next(iter(testloader))
-    plt.figure(figsize=(16, 24))
-    grid_imgs = torchvision.utils.make_grid(samples[:24])
-    np_grid_imgs = grid_imgs.numpy()
-    plt.imshow(np.transpose(np_grid_imgs, (1, 2, 0)))
-
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Device: ", device)
 
-    model = torchvision.models.resnet152(pretrained=True, progress=True)
-    model.fc = nn.Linear(2048, 1024)
-    model.fc1 = nn.Linear(1024, 512)
-    model.fc2 = nn.Linear(512, 22)
-    model.load_state_dict(torch.load(modelDataPath))
-    model.eval()
+    ##########
+    modelResnet = torchvision.models.resnet152(pretrained=True, progress=True)
+    modelResnet.fc = nn.Sequential(
+        nn.Linear(2048, 1024),
+        nn.LeakyReLU(),
+        nn.Linear(1024, 512),
+        nn.LeakyReLU(),
+        nn.Linear(512, 22)
+    )
+    ###########
+    modelResnext = torchvision.models.resnext50_32x4d(pretrained=True, progress=True)
+    modelResnext.fc = nn.Sequential(
+        nn.Linear(2048, 1500),
+        nn.LeakyReLU(),
+        nn.Linear(1500, 800),
+        nn.LeakyReLU(),
+        nn.Linear(800, 300),
+        nn.LeakyReLU(),
+        nn.Linear(300, 22)
+    )
+    ###########
+    modelGoogleNet = torchvision.models.googlenet(pretrained=True, progress=True)
+    modelGoogleNet.fc = nn.Sequential(
+        nn.Linear(1024, 800),
+        nn.LeakyReLU(),
+        nn.Linear(800, 500),
+        nn.LeakyReLU(),
+        nn.Linear(500, 200),
+        nn.LeakyReLU(),
+        nn.Linear(200, 22)
+    )
+    ###########
+    modelDenseNet = torchvision.models.densenet201(pretrained=True, progress=True)
+    modelDenseNet.classifier = nn.Sequential(
+        nn.Linear(1920, 1500),
+        nn.LeakyReLU(),
+        nn.Linear(1500, 1000),
+        nn.LeakyReLU(),
+        nn.Linear(1000, 400),
+        nn.LeakyReLU(),
+        nn.Linear(400, 22)
+    )
 
-    model = model.to(device)
+    modelResnet.load_state_dict(torch.load(modelFolderDataPath + "/resnet152Model.pt"))
+    modelResnext.load_state_dict(torch.load(modelFolderDataPath + "/ResnextModel.pt"))
+    modelGoogleNet.load_state_dict(torch.load(modelFolderDataPath + "/GoogleNetModel.pt"))
+    modelDenseNet.load_state_dict(torch.load(modelFolderDataPath + "/DenseNetModel.pt"))
+
+    modelResnet.eval()
+    modelResnext.eval()
+    modelGoogleNet.eval()
+    modelDenseNet.eval()
+
+    modelResnet = modelResnet.to(device)
+    modelResnext = modelResnext.to(device)
+    modelGoogleNet = modelGoogleNet.to(device)
+    modelDenseNet = modelDenseNet.to(device)
 
     print("Classification started")
 
-    model.eval()
     f = open("output.csv", "w")
     with torch.no_grad():
         for i, image in enumerate(testloader, 0):
             image = image.to(device=device)
-            output = model(image)
-            _, predicted = torch.max(output.data, 1)
+
+            outputResnet = modelResnet(image)
+            outputResnext = modelResnext(image)
+            outputGoogleNet = modelGoogleNet(image)
+            outputDenseNet = modelDenseNet(image)
+
+            _, predicted = torch.max((outputResnet.data + outputResnext.data +
+                                      outputGoogleNet.data + outputDenseNet.data) / 4, 1)
             sample_fname = testloader.dataset.file_list[i]
-            line = datasetPath + "\\" + sample_fname + "," + str(labelList[predicted.item()]) + '\n'
+            line = sample_fname + "," + str(labelList[predicted.item()]) + '\n'
             f.write(line)
     f.close()
+    print("Classification finished")
